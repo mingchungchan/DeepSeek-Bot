@@ -919,6 +919,16 @@ const HOST_ZH = {
   'Write the entry to save.': '请写下要保存的内容。',
   'This DeepSeek Harness has no folder chooser': '这个 DeepSeek Harness 没有文件夹选择窗口',
   'This DeepSeek Harness cannot list folders': '这个 DeepSeek Harness 不能列出文件夹',
+  // The card of work one Bot handed to another
+  Queued: '排队',
+  Now: '立即',
+  'Reply to you': '回给你',
+  'Reply to me': '回给我',
+  Delivered: '已送达',
+  'Sending…': '发送中…',
+  'Open chat': '打开对话',
+  Conversation: '往来记录',
+  '{n} min': '{n} 分钟',
 }
 Object.assign(ZH, HOST_ZH)
 

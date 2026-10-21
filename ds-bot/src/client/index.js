@@ -13,7 +13,7 @@ import { CHATS_SOURCE, atSources } from './at-menu.js'
 import { VOICE_BUNDLE } from './speech.js'
 import { sameVersion } from './dsh-offer.js'
 import { AnsweredCell, QuestionCard, QuestionDock } from './questions.js'
-import { AssistantCell, TriggerCell, TurnProcessCell, Nothing, TurnTailCell, ToolCell } from './cells.js'
+import { AssistantCell, TriggerCell, TurnProcessCell, Nothing, TurnTailCell, ToolCell, TASK_CSS } from './cells.js'
 import { Overlays } from './overlays.js'
 import { createBotBrowsers, serveBrowserReads } from './bot-browsers.js'
 import { BROWSER_CSS } from './browser-pane.js'
@@ -771,6 +771,7 @@ export function apply(ctx) {
     () => installCompiledStyles(FEEDBACK_CSS, 'feedback'),
     () => installCompiledStyles(ABOUT_CSS, 'about'),
     () => installCompiledStyles(MEMBER_CSS, 'members'),
+    () => installCompiledStyles(TASK_CSS, 'task-cards'),
     () => installCompiledStyles(USER_MESSAGE_CSS, 'user-messages'),
     browsers ? () => installCompiledStyles(BROWSER_CSS, 'browser') : null,
     () => installTheme(),

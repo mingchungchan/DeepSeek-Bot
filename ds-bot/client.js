@@ -965,7 +965,17 @@ var HOST_ZH = {
   "The model wrote nothing": "模型没有输出内容",
   "Write the entry to save.": "请写下要保存的内容。",
   "This DeepSeek Harness has no folder chooser": "这个 DeepSeek Harness 没有文件夹选择窗口",
-  "This DeepSeek Harness cannot list folders": "这个 DeepSeek Harness 不能列出文件夹"
+  "This DeepSeek Harness cannot list folders": "这个 DeepSeek Harness 不能列出文件夹",
+  // The card of work one Bot handed to another
+  Queued: "排队",
+  Now: "立即",
+  "Reply to you": "回给你",
+  "Reply to me": "回给我",
+  Delivered: "已送达",
+  "Sending…": "发送中…",
+  "Open chat": "打开对话",
+  Conversation: "往来记录",
+  "{n} min": "{n} 分钟"
 };
 Object.assign(ZH, HOST_ZH);
 var fill = (text, params) => params ? text.replace(/\{(\w+)\}/g, (match, name) => name in params ? String(params[name]) : match) : text;
@@ -4524,6 +4534,78 @@ function workPhrase(doing) {
   const label = toolActivity(tool, () => void 0, () => void 0)?.label ?? t("On it");
   return target ? `${label} · ${target}` : label;
 }
+function TaskCard({ target, self, done, message, when: when3, replyTo, actions, useWork, phrase }) {
+  const [open, setOpen] = (0, import_react7.useState)(false);
+  const liveKey = useWork ? useWork((work) => JSON.stringify(work.bots?.[target.id] ?? null)) : "null";
+  const live = JSON.parse(liveKey);
+  const [now, setNow] = (0, import_react7.useState)(Date.now);
+  (0, import_react7.useEffect)(() => {
+    if (live === null) return void 0;
+    const timer = setInterval(() => setNow(Date.now()), 3e4);
+    return () => clearInterval(timer);
+  }, [live]);
+  const minutes = live === null ? 0 : Math.floor((now - live.since) / 6e4);
+  const state = live !== null ? phrase(live) : done ? t("Delivered") : t("Sending…");
+  const chips = [when3 === "queue" ? t("Queued") : t("Now"), replyTo === "user" ? t("Reply to you") : t("Reply to me")];
+  const long = typeof message === "string" && message.length > 160;
+  return (0, import_react7.createElement)(
+    "div",
+    { className: "bt-task", "data-live": live !== null ? "" : void 0 },
+    (0, import_react7.createElement)(
+      "div",
+      { className: "bt-task-head" },
+      (0, import_react7.createElement)(
+        "button",
+        {
+          type: "button",
+          className: "bt-task-who",
+          title: t("Open {name}'s chat", { name: target.name }),
+          onClick: () => actions.openSession(target.id)
+        },
+        (0, import_react7.createElement)(BotMark, { bot: target, size: 22 }),
+        (0, import_react7.createElement)("span", { className: "bt-task-name" }, target.name),
+        target.role ? (0, import_react7.createElement)("span", { className: "bt-task-role" }, target.role) : null
+      ),
+      (0, import_react7.createElement)(
+        "span",
+        { className: "bt-task-state" },
+        (0, import_react7.createElement)("span", { className: "bt-task-doing" }, live !== null ? `${state}…` : state),
+        minutes >= 1 ? (0, import_react7.createElement)("span", { className: "bt-task-time" }, ` · ${t("{n} min", { n: minutes })}`) : null
+      )
+    ),
+    (0, import_react7.createElement)("div", { className: "bt-task-chips" }, chips.map((chip) => (0, import_react7.createElement)("span", { key: chip, className: "bt-task-chip" }, chip))),
+    message ? (0, import_react7.createElement)("div", { className: "bt-task-text", "data-open": open ? "" : void 0 }, message) : null,
+    long ? (0, import_react7.createElement)("button", { type: "button", className: "bt-task-more", onClick: () => setOpen((value) => !value) }, open ? t("Show less") : t("Show more")) : null,
+    (0, import_react7.createElement)(
+      "div",
+      { className: "bt-task-actions" },
+      (0, import_react7.createElement)("button", { type: "button", className: "bt-task-btn", onClick: () => actions.openSession(target.id) }, t("Open chat")),
+      (0, import_react7.createElement)("button", { type: "button", className: "bt-task-btn", onClick: () => actions.openExchange(self?.id, target.id) }, t("Conversation"))
+    )
+  );
+}
+var TASK_CSS = `
+.bt-task{display:flex;flex-direction:column;gap:6px;max-width:min(560px,100%);margin:6px 0 10px;padding:10px 12px;border:1px solid var(--bt-line);border-radius:12px;background:var(--bt-main);font-size:12px;line-height:17px;color:var(--bt-ink-2);animation:bt-rise .2s ease-out backwards}
+.bt-task-head{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0}
+.bt-task-who{display:inline-flex;align-items:center;gap:6px;min-width:0;padding:0;border:0;background:none;color:var(--bt-ink);font:inherit;font-size:13px;cursor:pointer}
+.bt-task-who:hover{text-decoration:underline}
+.bt-task-name{font-weight:600;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-task-role{flex:none;font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid var(--bt-line);color:var(--bt-ink-3)}
+.bt-task-state{flex:0 1 auto;min-width:0;display:inline-flex;align-items:baseline;color:var(--bt-ink-2)}
+.bt-task-doing{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-task-time{flex:none;color:var(--bt-ink-3)}
+.bt-task-chips{display:flex;gap:6px;flex-wrap:wrap}
+.bt-task-chip{font-size:11px;line-height:16px;padding:0 6px;border-radius:999px;border:1px solid var(--bt-line);color:var(--bt-ink-3);white-space:nowrap}
+.bt-task-text{color:var(--bt-ink);white-space:pre-wrap;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.bt-task-text[data-open]{display:block;-webkit-line-clamp:unset}
+.bt-task-more{align-self:flex-start;padding:0;border:0;background:none;color:var(--bt-ink-3);font:inherit;font-size:11px;cursor:pointer}
+.bt-task-more:hover{color:var(--bt-ink)}
+.bt-task-actions{display:flex;gap:8px}
+.bt-task-btn{height:24px;padding:0 8px;border-radius:6px;border:1px solid var(--bt-line);background:var(--bt-main);color:var(--bt-ink);font:inherit;font-size:12px;cursor:pointer}
+.bt-task-btn:hover{background:var(--bt-hover)}
+.bt-task[data-live] .bt-task-doing{color:var(--bt-ink)}
+@media (prefers-reduced-motion:reduce){.bt-task{animation:none}}
+`;
 function useLiveNote(actions, sessionId, id, entry) {
   const key = entry ? JSON.stringify(entry) : "";
   (0, import_react7.useEffect)(() => {
@@ -4669,7 +4751,18 @@ function renderCall(call2, { sessionId, roster, actions, useUi, useWork, findBot
     case "message_bot": {
       const target = findBot(arg("to")) ?? { name: arg("to") ?? "…", color: "gray" };
       if (done && call2.isError) return (0, import_react7.createElement)("div", { className: "bt-event" }, t("Couldn't message {name}", { name: target.name }));
-      return (0, import_react7.createElement)(EventLine, { prefix: t("Messaged"), bots: [target], onOpen: (bot) => bot.id && actions.openExchange(self?.id ?? sessionId, bot.id), whole: true });
+      if (target.id === void 0) return (0, import_react7.createElement)(EventLine, { prefix: t("Messaged"), bots: [target], onOpen: (bot) => bot.id && actions.openExchange(self?.id ?? sessionId, bot.id), whole: true });
+      return (0, import_react7.createElement)(TaskCard, {
+        target,
+        self: self ?? { id: sessionId },
+        done,
+        message: String(arg("message") ?? ""),
+        when: arg("when") === "queue" ? "queue" : "now",
+        replyTo: arg("reply_to") === "user" ? "user" : "me",
+        actions,
+        useWork,
+        phrase: workPhrase
+      });
     }
     case "stop_bot": {
       const target = findBot(arg("bot")) ?? { name: arg("bot") ?? "…", color: "gray" };
@@ -14351,6 +14444,7 @@ function apply(ctx) {
     () => installCompiledStyles(FEEDBACK_CSS, "feedback"),
     () => installCompiledStyles(ABOUT_CSS, "about"),
     () => installCompiledStyles(MEMBER_CSS, "members"),
+    () => installCompiledStyles(TASK_CSS, "task-cards"),
     () => installCompiledStyles(USER_MESSAGE_CSS, "user-messages"),
     browsers ? () => installCompiledStyles(BROWSER_CSS, "browser") : null,
     () => installTheme(),

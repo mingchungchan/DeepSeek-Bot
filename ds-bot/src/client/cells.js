@@ -595,6 +595,69 @@ export function workPhrase(doing) {
   return target ? `${label} · ${target}` : label
 }
 
+// The work one Bot handed to another with message_bot: whom it went to, the task, and
+// what that Bot does with it right now. The sender's chat draws it instead of a line.
+function TaskCard({ target, self, done, message, when, replyTo, actions, useWork, phrase }) {
+  const [open, setOpen] = useState(false)
+  // The work view is a whole object; a JSON key keeps the subscription stable, as the
+  // sidebar's work rows do.
+  const liveKey = useWork ? useWork(work => JSON.stringify(work.bots?.[target.id] ?? null)) : 'null'
+  const live = JSON.parse(liveKey)
+  const [now, setNow] = useState(Date.now)
+  useEffect(() => {
+    if (live === null) return undefined
+    const timer = setInterval(() => setNow(Date.now()), 30_000)
+    return () => clearInterval(timer)
+  }, [live])
+  const minutes = live === null ? 0 : Math.floor((now - live.since) / 60_000)
+  const state = live !== null ? phrase(live) : done ? t('Delivered') : t('Sending…')
+  const chips = [when === 'queue' ? t('Queued') : t('Now'), replyTo === 'user' ? t('Reply to you') : t('Reply to me')]
+  const long = typeof message === 'string' && message.length > 160
+  return h('div', { className: 'bt-task', 'data-live': live !== null ? '' : undefined },
+    h('div', { className: 'bt-task-head' },
+      h('button', {
+        type: 'button',
+        className: 'bt-task-who',
+        title: t("Open {name}'s chat", { name: target.name }),
+        onClick: () => actions.openSession(target.id),
+      },
+      h(BotMark, { bot: target, size: 22 }),
+      h('span', { className: 'bt-task-name' }, target.name),
+      target.role ? h('span', { className: 'bt-task-role' }, target.role) : null),
+      h('span', { className: 'bt-task-state' },
+        h('span', { className: 'bt-task-doing' }, live !== null ? `${state}…` : state),
+        minutes >= 1 ? h('span', { className: 'bt-task-time' }, ` · ${t('{n} min', { n: minutes })}`) : null)),
+    h('div', { className: 'bt-task-chips' }, chips.map(chip => h('span', { key: chip, className: 'bt-task-chip' }, chip))),
+    message ? h('div', { className: 'bt-task-text', 'data-open': open ? '' : undefined }, message) : null,
+    long ? h('button', { type: 'button', className: 'bt-task-more', onClick: () => setOpen(value => !value) }, open ? t('Show less') : t('Show more')) : null,
+    h('div', { className: 'bt-task-actions' },
+      h('button', { type: 'button', className: 'bt-task-btn', onClick: () => actions.openSession(target.id) }, t('Open chat')),
+      h('button', { type: 'button', className: 'bt-task-btn', onClick: () => actions.openExchange(self?.id, target.id) }, t('Conversation'))))
+}
+
+export const TASK_CSS = `
+.bt-task{display:flex;flex-direction:column;gap:6px;max-width:min(560px,100%);margin:6px 0 10px;padding:10px 12px;border:1px solid var(--bt-line);border-radius:12px;background:var(--bt-main);font-size:12px;line-height:17px;color:var(--bt-ink-2);animation:bt-rise .2s ease-out backwards}
+.bt-task-head{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0}
+.bt-task-who{display:inline-flex;align-items:center;gap:6px;min-width:0;padding:0;border:0;background:none;color:var(--bt-ink);font:inherit;font-size:13px;cursor:pointer}
+.bt-task-who:hover{text-decoration:underline}
+.bt-task-name{font-weight:600;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-task-role{flex:none;font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid var(--bt-line);color:var(--bt-ink-3)}
+.bt-task-state{flex:0 1 auto;min-width:0;display:inline-flex;align-items:baseline;color:var(--bt-ink-2)}
+.bt-task-doing{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-task-time{flex:none;color:var(--bt-ink-3)}
+.bt-task-chips{display:flex;gap:6px;flex-wrap:wrap}
+.bt-task-chip{font-size:11px;line-height:16px;padding:0 6px;border-radius:999px;border:1px solid var(--bt-line);color:var(--bt-ink-3);white-space:nowrap}
+.bt-task-text{color:var(--bt-ink);white-space:pre-wrap;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.bt-task-text[data-open]{display:block;-webkit-line-clamp:unset}
+.bt-task-more{align-self:flex-start;padding:0;border:0;background:none;color:var(--bt-ink-3);font:inherit;font-size:11px;cursor:pointer}
+.bt-task-more:hover{color:var(--bt-ink)}
+.bt-task-actions{display:flex;gap:8px}
+.bt-task-btn{height:24px;padding:0 8px;border-radius:6px;border:1px solid var(--bt-line);background:var(--bt-main);color:var(--bt-ink);font:inherit;font-size:12px;cursor:pointer}
+.bt-task-btn:hover{background:var(--bt-hover)}
+.bt-task[data-live] .bt-task-doing{color:var(--bt-ink)}
+@media (prefers-reduced-motion:reduce){.bt-task{animation:none}}
+`
+
 // Transcript rows report what is in flight to the one activity row at the tail.
 function useLiveNote(actions, sessionId, id, entry) {
   const key = entry ? JSON.stringify(entry) : ''
@@ -721,7 +784,19 @@ function renderCall(call, { sessionId, roster, actions, useUi, useWork, findBot 
     case 'message_bot': {
       const target = findBot(arg('to')) ?? { name: arg('to') ?? '…', color: 'gray' }
       if (done && call.isError) return h('div', { className: 'bt-event' }, t("Couldn't message {name}", { name: target.name }))
-      return h(EventLine, { prefix: t('Messaged'), bots: [target], onOpen: bot => bot.id && actions.openExchange(self?.id ?? sessionId, bot.id), whole: true })
+      // A Bot whose chat this window does not know (removed since) keeps the plain line.
+      if (target.id === undefined) return h(EventLine, { prefix: t('Messaged'), bots: [target], onOpen: bot => bot.id && actions.openExchange(self?.id ?? sessionId, bot.id), whole: true })
+      return h(TaskCard, {
+        target,
+        self: self ?? { id: sessionId },
+        done,
+        message: String(arg('message') ?? ''),
+        when: arg('when') === 'queue' ? 'queue' : 'now',
+        replyTo: arg('reply_to') === 'user' ? 'user' : 'me',
+        actions,
+        useWork,
+        phrase: workPhrase,
+      })
     }
     case 'stop_bot': {
       const target = findBot(arg('bot')) ?? { name: arg('bot') ?? '…', color: 'gray' }
