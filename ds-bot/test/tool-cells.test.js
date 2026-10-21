@@ -167,10 +167,11 @@ test('a group post drawn from its trigger shows the time it came in', () => {
   effects = []
 })
 
-const props = (root, { sessionId = chief.id, roster = team(), actions = {}, turn = 1, held = {} } = {}) => ({
+const props = (root, { sessionId = chief.id, roster = team(), actions = {}, turn = 1, held = {}, useWork } = {}) => ({
   node: { key: 'node', data: { root }, location: { turn: { turn } } }, sessionId,
   useRoster: select => select(roster), useUi: select => select({ reactions: {}, visits: {} }), actions,
   useHeldCards: select => select(held),
+  useWork,
 })
 const show = (root, options) => {
   const out = expand(ToolCell(props(root, options)))
@@ -180,8 +181,10 @@ const show = (root, options) => {
 const shown = (root, options) => text(show(root, options))
 
 // One finished call of every kind ToolCell draws, and what it shows.
+// message_bot draws the task card now, not an event line: the Bot it went to, how the turn
+// stands, the mode it was sent in, and the two ways into that Bot.
 const BRANCHES = [
-  ['message_bot', { args: { to: 'Writer' } }, /Messaged.*Writer/],
+  ['message_bot', { args: { to: 'Writer' } }, /Writer.*Delivered.*Now.*Reply to me.*Open chat.*Conversation/],
   ['stop_bot', { args: { bot: 'Writer' } }, /Stopped.*Writer/],
   ['create_bot', { args: { name: 'Writer' } }, /Created.*Writer/],
   ['update_bot', { args: { name: 'Writer' } }, /Updated.*Writer/],
@@ -218,8 +221,8 @@ test('a program draws every known sub-call in dispatch order and each call once'
   const root = program([message, call('run_code', 'program:ptc:4', { subCalls: [relay, secret, message] }), relay, call('bash', 'program:ptc:5')])
   assert.deepEqual(JSON.parse(JSON.stringify(callTree(root).map(entry => entry.callId))), ['program', 'program:ptc:1', 'program:ptc:4', 'program:ptc:2', 'program:ptc:3', 'program:ptc:5'])
   const out = shown(root, { roster: team({ secretRequests: { chief: [request('program:ptc:3')] } }) })
-  assert.match(out, /Messaged.*Writer.*Group reply\..*Chief needs a key/)
-  assert.equal(count(out, 'Messaged'), 1)
+  assert.match(out, /Writer.*Group reply\..*Chief needs a key/)
+  assert.equal(count(out, 'Writer'), 2)
   assert.equal(count(out, 'Group reply.'), 1)
   assert.equal(count(out, 'needs a key'), 1)
 })
@@ -245,7 +248,9 @@ test('each sub-call shows its own state, not its program\'s', () => {
   assert.equal(shown(program([{ ...call('create_bot', 'program:ptc:1', { args: { name: 'Writer' }, running: true }) }])), '')
   const failed = call('message_bot', 'program:ptc:1', { args: { to: 'Writer' }, isError: true })
   assert.match(shown(program([failed])), /Couldn't message Writer/)
-  assert.match(shown(program([call('message_bot', 'program:ptc:1', { args: { to: 'Writer' } })], { isError: true })), /^Messaged/)
+  // The failed sub-call is its own call; the program's error does not reach it, so it
+  // keeps its card and reports the hand-off as Delivered.
+  assert.match(shown(program([call('message_bot', 'program:ptc:1', { args: { to: 'Writer' } })], { isError: true })), /^Writer.*Delivered/)
   const refused = call('post_to_group', 'program:ptc:1', { content: 'No group is called "Nope".', isError: true })
   const posted = call('post_to_group', 'program:ptc:2', { content: 'Posted in "Ops".' })
   assert.match(shown(program([refused, posted])), /Couldn't post in the group.*Posted in.*Ops/)
@@ -262,18 +267,56 @@ test('a hidden Bot-to-Bot turn draws none of its sub-calls', () => {
   const roster = team({ exchangeTurns: { chief: [1] }, secretRequests: { chief: [request('program:ptc:1')] } })
   const root = program([call('request_secret', 'program:ptc:1', { args: { name: 'DEMO_TOKEN' } }), call('message_bot', 'program:ptc:2', { args: { to: 'Writer' } })])
   assert.equal(shown(root, { roster }), '')
-  assert.match(shown(root, { roster, turn: 2 }), /Chief needs a key.*Messaged/)
+  assert.match(shown(root, { roster, turn: 2 }), /Chief needs a key.*Writer.*Delivered/)
 })
 
-test('a message line opens the exchange of the chat\'s Bot, from any part', () => {
+// The card hands out two ways in: its head and Open chat open the target's own chat, and
+// Conversation opens the exchange. This reads the exchange, so it takes the second one.
+test('a message card opens the exchange of the chat\'s Bot, from any part', () => {
   const opened = []
-  const out = show(program([call('message_bot', 'program:ptc:1', { args: { to: 'Writer' } })]), { actions: { openExchange: (...ids) => opened.push(ids) } })
-  find(out, node => node.type === 'button').props.onClick()
+  const openSession = () => { throw new Error('the exchange is the second button') }
+  const actions = { openSession, openExchange: (...ids) => opened.push(ids) }
+  const conversation = node => find(node, item => item.type === 'button' && text(item) === 'Conversation')
+  const out = show(program([call('message_bot', 'program:ptc:1', { args: { to: 'Writer' } })]), { actions })
+  conversation(out).props.onClick()
   const current = { ...chief, sessionId: 'chief-2', parts: ['chief', 'chief-2'] }
   const roster = team({ bots: [writer, current], byId: { writer, chief: current, 'chief-2': current } })
-  const later = show(call('message_bot', 'direct', { args: { to: 'Writer' } }), { sessionId: 'chief-2', roster, actions: { openExchange: (...ids) => opened.push(ids) } })
-  find(later, node => node.type === 'button').props.onClick()
+  const later = show(call('message_bot', 'direct', { args: { to: 'Writer' } }), { sessionId: 'chief-2', roster, actions })
+  conversation(later).props.onClick()
   assert.deepEqual(JSON.parse(JSON.stringify(opened)), [['chief', 'writer'], ['chief', 'writer']])
+})
+
+// What the card says while the hand-off is in flight, and once it landed. A badge used to
+// repeat the head line's word, so the card read as two states at once.
+test('a task card says one thing at a time, in flight and once landed', () => {
+  const args = { to: 'Writer' }
+  const sending = shown(call('message_bot', 'sending', { args, running: true }))
+  assert.match(sending, /^Writer.*Sending…/)
+  assert.doesNotMatch(sending, /Idle/)
+  const landed = shown(call('message_bot', 'landed', { args, content: 'Delivered to Writer.' }))
+  assert.match(landed, /^Writer.*Delivered/)
+  assert.equal(count(landed, 'Delivered'), 1)
+})
+
+// The work view names what a held-up Bot waits for by id; the card shows the names, and a
+// teammate the window cannot resolve still reads as a teammate rather than as nothing.
+test('a task card names the teammate a held-up Bot waits for, not its id', () => {
+  const target = { id: 'botwriter', name: 'Writer', color: 'blue' }
+  const coder = { id: 'botcoder', name: 'Coder', color: 'red' }
+  const ops = { id: 'roomops', name: 'Ops' }
+  const roster = team({ bots: [target, coder], byId: { botwriter: target, botcoder: coder }, rooms: [ops], roomsById: { roomops: ops } })
+  const args = { to: 'Writer' }
+  const teammate = { bots: {}, rooms: {}, approvals: [], waiting: { botwriter: { bots: ['botcoder'], rooms: [], for: ['chief'] } } }
+  const waiting = shown(call('message_bot', 'w1', { args }), { roster, useWork: select => select(teammate) })
+  assert.match(waiting, /Waiting for a teammate/)
+  assert.match(waiting, /Waiting for Coder in another chat/)
+  assert.doesNotMatch(waiting, /botcoder/)
+  const inGroup = { ...teammate, waiting: { botwriter: { bots: [], rooms: ['roomops'], for: ['chief'] } } }
+  assert.match(shown(call('message_bot', 'w2', { args }), { roster, useWork: select => select(inGroup) }), /Waiting for Ops in a group/)
+  const gone = { ...teammate, waiting: { botwriter: { bots: ['botgone'], rooms: [], for: ['chief'] } } }
+  const unresolvable = shown(call('message_bot', 'w3', { args }), { roster, useWork: select => select(gone) })
+  assert.match(unresolvable, /Waiting for a teammate/)
+  assert.doesNotMatch(unresolvable, /botgone/)
 })
 
 // The activity row reads one note per chat node.

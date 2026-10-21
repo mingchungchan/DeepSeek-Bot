@@ -35,10 +35,11 @@ const useGroupWork = (useWork, pick) => (useWork ? useWork(work => JSON.stringif
 const workKeys = text => JSON.parse(text)
 const doingOf = ({ tool, said, note, target, switching }) => ({ tool, said, note, target, switching })
 const workLine = (lead, doing, more) => h(Shimmer, null, `${lead} · ${workPhrase(doing)}…${more > 0 ? ` +${more}` : ''}`)
-// The Bots and groups a Bot waits for (handoffs.js), by the names they have now.
+// The Bots and groups a Bot waits for (handoffs.js), by the names they have now. A Bot
+// whose waits all name something gone still reads as waiting rather than as idle.
 const waitingFor = (roster, waits) => {
   const names = [...(waits?.bots ?? []).map(id => roster.byId[id]?.name), ...(waits?.rooms ?? []).map(id => roster.roomsById[id]?.name)].filter(Boolean)
-  return names.length === 0 ? '' : t('Waiting for {names}', { names: names.join(t(' and ')) })
+  return t('Waiting for {names}', { names: names.length === 0 ? t('a teammate') : names.join(t(' and ')) })
 }
 
 function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessionRetainInfo, useActivity, useWork, wide, marked }) {

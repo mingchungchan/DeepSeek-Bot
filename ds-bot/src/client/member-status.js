@@ -14,28 +14,72 @@ const NO_WORK = { bots: {}, rooms: {}, approvals: [] }
 const FACES_MAX = 3
 const DOCK_EXIT_MS = 160
 
+// A Bot that has run this long without its tool changing is more likely stuck than busy:
+// a turn that keeps making calls reports a new call each time, so one call held for
+// half an hour is the signal, not the clock alone. Reporting "maybe stuck" wrongly is
+// worse than missing it, so the threshold sits far above any ordinary call.
+const STUCK_MS = 30 * 60 * 1000
+
+// What a Bot is doing right now, from the live work view alone. `idle` covers both a
+// Bot with nothing to do and one whose work the user cannot see from here.
+export function botWork(id, work = NO_WORK) {
+  const roomId = Object.entries(work.rooms ?? {}).find(([, entries]) => entries.some(entry => entry.botId === id))?.[0]
+  const local = roomId ? work.rooms[roomId].find(entry => entry.botId === id) : undefined
+  const own = work.bots?.[id]
+  // Work in a group runs in a Session of its own, so the Bot's own chat stays idle.
+  const doing = local ? { ...local, roomId } : own
+  return {
+    id,
+    roomId: doing?.roomId,
+    doing,
+    since: doing?.since,
+    approvals: (work.approvals ?? []).filter(entry => entry.botId === id),
+    waits: work.waiting?.[id],
+  }
+}
+
+// One word for a Bot's whole state, in the order that reads as most urgent first. A Bot
+// waiting on a handoff is not idle, but it also runs nothing, so it ranks below work.
+export function workStatus(entry) {
+  if ((entry?.approvals ?? []).length > 0) return 'ask'
+  if (entry?.doing) return 'work'
+  if (entry?.waits) return 'waiting'
+  return 'idle'
+}
+
+// Whether a Bot's running call has outlived the threshold. A turn between calls has no
+// tool to hold, so it never counts.
+export function looksStuck(entry, now) {
+  if (!entry?.doing || entry.doing.switching || entry.doing.tool === undefined) return false
+  return entry.since !== undefined && now - entry.since >= STUCK_MS
+}
+
 // Work in this group wins over the Bot's own chat or another group.
 export function memberWork(room, work = NO_WORK) {
   const here = work.rooms?.[room.id] ?? []
   return room.members.map((id) => {
-    const approvals = (work.approvals ?? []).filter(entry => entry.botId === id)
-    const local = here.find(entry => entry.botId === id)
+    const entry = botWork(id, work)
+    const local = here.find(item => item.botId === id)
     const doing = local ? { ...local, roomId: room.id } : work.bots?.[id]
-    return { id, approvals, doing, here: local !== undefined, state: approvals.length > 0 ? 'ask' : doing ? 'work' : 'idle' }
+    const state = entry.approvals.length > 0 ? 'ask' : doing ? 'work' : entry.waits ? 'waiting' : 'idle'
+    return { id, approvals: entry.approvals, doing, here: local !== undefined, waits: entry.waits, state }
   })
 }
 
 // The busy members, those waiting for an approval first.
 export function busyMembers(room, work, roster) {
   const busy = memberWork(room, work).filter(entry => entry.state !== 'idle' && roster.byId[entry.id])
-  return [...busy.filter(entry => entry.state === 'ask'), ...busy.filter(entry => entry.state === 'work')]
-    .map(entry => ({ ...entry, bot: roster.byId[entry.id] }))
+  const rank = { ask: 0, work: 1, waiting: 2 }
+  return [...busy].sort((a, b) => (rank[a.state] ?? 3) - (rank[b.state] ?? 3)).map(entry => ({ ...entry, bot: roster.byId[entry.id] }))
 }
 
 // The capsule leaves out the round's current speaker, which its round shows.
 const dockMembers = busy => busy.filter(entry => !(entry.state === 'work' && entry.here && entry.doing.speaking === true))
 
 export const workState = doing => (doing?.switching ? 'thinking' : toolState(doing?.tool ?? ''))
+
+// The mark a member wears in a list: what it waits on outranks what it runs.
+export const memberState = entry => (entry?.state === 'ask' ? 'alert' : entry?.state === 'waiting' ? 'waiting' : workState(entry?.doing))
 
 // The groups a Bot is at work in.
 export function botGroupWork(botId, work, roster) {
@@ -49,6 +93,7 @@ export function botGroupWork(botId, work, roster) {
 export function summaryText(busy) {
   const asks = busy.filter(entry => entry.state === 'ask')
   const workers = busy.filter(entry => entry.state === 'work')
+  const waits = busy.filter(entry => entry.state === 'waiting')
   const names = asks.slice(0, 2).map(entry => entry.bot.name)
   const waiting = asks.length === 0 ? ''
     : asks.length === 1 ? t('{name} is waiting for your approval', { name: names[0] })
@@ -56,7 +101,23 @@ export function summaryText(busy) {
         : t('{first}, {second} and {count} more are waiting for your approval', { first: names[0], second: names[1], count: asks.length - 2, total: asks.length })
   const first = workers[0]
   const doing = first ? `${first.bot.name} · ${workPhrase(first.doing)}…${workers.length > 1 ? ` +${workers.length - 1}` : ''}` : ''
-  return { waiting, doing }
+  // A handoff report carries its own name, so it reads beside a worker's line too.
+  const handoff = waits.length === 0 ? '' : `${waits[0].bot.name} · ${waitLabel(waits[0].waits)}`
+  return { waiting, doing: [doing, handoff].filter(Boolean).join(' · ') }
+}
+
+// The Bots and groups a Bot waits for, already by name.
+export function waitLabel(waits) {
+  const names = waits?.names ?? []
+  if (names.length === 0) return t('Waiting for a teammate')
+  return t('Waiting for {names}', { names: names.join(t(' and ')) })
+}
+
+// `waitingView` sends ids; a label needs the names they have now.
+export function waitNames(waits, roster) {
+  if (!waits) return undefined
+  const names = [...(waits.bots ?? []).map(id => roster.byId[id]?.name), ...(waits.rooms ?? []).map(id => roster.roomsById[id]?.name)].filter(Boolean)
+  return { names }
 }
 
 // What the capsule shows, as plain data: it outlives the work for its exit.
@@ -65,10 +126,10 @@ function dockModel(sessionId, roster, work) {
   if (room) {
     const busy = dockMembers(busyMembers(room, work, roster))
     if (busy.length === 0) return null
-    const { waiting, doing } = summaryText(busy)
+    const { waiting, doing } = summaryText(busy.map(entry => ({ ...entry, waits: waitNames(entry.waits, roster) })))
     return {
       open: { details: room.id },
-      faces: busy.slice(0, FACES_MAX).map(entry => ({ id: entry.id, ask: entry.state === 'ask', state: workState(entry.doing) })),
+      faces: busy.slice(0, FACES_MAX).map(entry => ({ id: entry.id, ask: entry.state === 'ask', wait: entry.state === 'waiting', state: memberState(entry) })),
       waiting, doing,
     }
   }
@@ -86,9 +147,9 @@ function dockModel(sessionId, roster, work) {
   }
 }
 
-function Face({ bot, ask, state }) {
-  return h('span', { className: 'bt-mw-face', 'data-ask': ask || undefined },
-    h(BotMark, { bot, size: 20, state: ask ? 'alert' : state }))
+function Face({ bot, ask, wait, state }) {
+  return h('span', { className: 'bt-mw-face', 'data-ask': ask || undefined, 'data-wait': wait || undefined },
+    h(BotMark, { bot, size: 20, state: ask ? 'alert' : wait ? 'waiting' : state }))
 }
 
 // The capsule springs to the width of what it says; it is measured, so the spring runs
@@ -152,6 +213,7 @@ function ApprovalCard({ approval, bot, actions }) {
 // A member's second line in the group's details: what it is doing and where, or its role.
 export function MemberState({ entry, bot, room, roster }) {
   if (entry?.state === 'ask') return stateLine('bt-member-state bt-mw-ask', entry.approvals[0].at, t('Waiting for your approval'))
+  if (entry?.state === 'waiting') return stateLine('bt-member-state bt-mw-wait', undefined, waitLabel(waitNames(entry.waits, roster)))
   if (entry?.state !== 'work') return bot.role ? stateLine('bt-member-state', undefined, bot.role) : null
   const where = entry.doing.roomId === room.id ? ''
     : entry.doing.roomId ? t('in {name}', { name: roster.roomsById[entry.doing.roomId]?.name ?? t('a group chat') })
@@ -194,9 +256,11 @@ export const MEMBER_CSS = `
 .bt-mw-face{position:relative;display:inline-flex;flex:none;border-radius:50%;background:var(--bt-main);box-shadow:0 0 0 2px var(--bt-main);animation:bt-mw-seat .26s cubic-bezier(.34,1.56,.64,1) backwards}
 .bt-mw-face+.bt-mw-face{margin-left:-5px}
 .bt-mw-face[data-ask]::after{content:"";position:absolute;right:-1px;bottom:-1px;width:7px;height:7px;border-radius:50%;background:#e3a008;box-shadow:0 0 0 1.5px var(--bt-main)}
+.bt-mw-face[data-wait]::after{content:"";position:absolute;right:-1px;bottom:-1px;width:7px;height:7px;border-radius:50%;background:var(--bt-ink-3);box-shadow:0 0 0 1.5px var(--bt-main)}
 .bt-mw-label{display:inline-flex;align-items:center;gap:5px;min-width:0;max-width:min(420px,58vw);animation:bt-mw-swap .22s ease-out backwards}
 .bt-mw-label>*{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bt-mw-ask{color:#b7791f;flex:none}
+.bt-mw-wait{color:var(--bt-ink-2);flex:0 1 auto}
 .bt-mw-dot{flex:none;color:var(--bt-ink-3)}
 .bt-mw-doing{flex:0 1 auto}
 body[data-ds-dark-theme] .bt-mw-ask{color:#f0b84a}
@@ -218,12 +282,24 @@ body[data-ds-dark-theme] .bt-mw-ask{color:#f0b84a}
 .bt-member-what{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .bt-member-time{flex:none;margin-left:.3em;font-variant-numeric:tabular-nums}
 .bt-member-state.bt-mw-ask{color:#b7791f}
+.bt-member-state.bt-mw-wait{color:var(--bt-ink-2)}
 body[data-ds-dark-theme] .bt-member-state.bt-mw-ask{color:#f0b84a}
 .bt-member-stop{flex:none;height:26px;padding:0 11px;border:0;border-radius:13px;background:var(--bt-main);box-shadow:inset 0 0 0 .5px var(--bt-line-2);color:var(--bt-ink-2);font:inherit;font-size:12px;cursor:pointer;transition:background-color .12s ease,color .12s ease,${spring(SPRING_TAP, 'scale')}}
 .bt-member-stop:hover{background:var(--bt-active);color:var(--bt-ink)}
 .bt-member-stop:active:not(:disabled){scale:.94}
 .bt-member-stop:disabled{opacity:.5;cursor:default}
 .bt-member-cards{display:flex;flex-direction:column;gap:6px;padding:2px 8px 8px 50px}
+/* The details panel's current-work block: one line of state, one of what it does now. */
+.bt-work{display:flex;flex-direction:column;gap:4px}
+.bt-work-row{display:flex;align-items:baseline;justify-content:space-between;gap:8px;font-size:12px;line-height:18px}
+.bt-work-state{color:var(--bt-ink-2)}
+.bt-work-state[data-state=work]{color:var(--bt-ink)}
+.bt-work-state[data-stuck]{color:var(--bt-danger)}
+.bt-work-since{flex:none;color:var(--bt-ink-3);font-variant-numeric:tabular-nums}
+.bt-work-doing,.bt-work-waits{display:flex;align-items:baseline;gap:6px;min-width:0;font-size:12px;line-height:17px;color:var(--bt-ink-2)}
+.bt-work-phrase{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--bt-ink)}
+.bt-work-where{flex:none;color:var(--bt-ink-3)}
+.bt-work-elapsed{flex:none;margin-left:auto;color:var(--bt-ink-3);font-variant-numeric:tabular-nums}
 .bt-mw-card{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border-radius:12px;background:var(--bt-hover);font-size:12px;line-height:17px;color:var(--bt-ink-2);animation:bt-rise .2s ease-out backwards}
 .bt-mw-tool{font-weight:600;color:var(--bt-ink)}
 .bt-mw-text{color:var(--bt-ink);overflow-wrap:anywhere}
