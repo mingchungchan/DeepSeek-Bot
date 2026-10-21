@@ -929,6 +929,21 @@ const HOST_ZH = {
   'Open chat': '打开对话',
   Conversation: '往来记录',
   '{n} min': '{n} 分钟',
+  // What each Bot is doing now, on the card and in the details panel
+  'Current work': '当前工作',
+  Working: '工作中',
+  Idle: '空闲',
+  'Waiting for approval': '等审批',
+  'Waiting for your approval': '等你批准',
+  'Waiting for a teammate': '等队友回传',
+  'Maybe stuck': '可能卡住了',
+  'Working in {room}': '在群聊「{room}」里工作',
+  'Waiting for': '正在等',
+  '{names} in another chat': '{names} 在自己的对话里',
+  '{names} in a group': '{names} 在群聊里',
+  'Waiting for your approval to run {tool}': '等你批准运行 {tool}',
+  'since {when}': '从 {when} 起',
+  'a teammate': '一个队友',
 }
 Object.assign(ZH, HOST_ZH)
 

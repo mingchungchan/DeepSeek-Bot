@@ -975,7 +975,22 @@ var HOST_ZH = {
   "Sending…": "发送中…",
   "Open chat": "打开对话",
   Conversation: "往来记录",
-  "{n} min": "{n} 分钟"
+  "{n} min": "{n} 分钟",
+  // What each Bot is doing now, on the card and in the details panel
+  "Current work": "当前工作",
+  Working: "工作中",
+  Idle: "空闲",
+  "Waiting for approval": "等审批",
+  "Waiting for your approval": "等你批准",
+  "Waiting for a teammate": "等队友回传",
+  "Maybe stuck": "可能卡住了",
+  "Working in {room}": "在群聊「{room}」里工作",
+  "Waiting for": "正在等",
+  "{names} in another chat": "{names} 在自己的对话里",
+  "{names} in a group": "{names} 在群聊里",
+  "Waiting for your approval to run {tool}": "等你批准运行 {tool}",
+  "since {when}": "从 {when} 起",
+  "a teammate": "一个队友"
 };
 Object.assign(ZH, HOST_ZH);
 var fill = (text, params) => params ? text.replace(/\{(\w+)\}/g, (match, name) => name in params ? String(params[name]) : match) : text;
@@ -4534,10 +4549,37 @@ function workPhrase(doing) {
   const label = toolActivity(tool, () => void 0, () => void 0)?.label ?? t("On it");
   return target ? `${label} · ${target}` : label;
 }
-function TaskCard({ target, self, done, message, when: when3, replyTo, actions, useWork, phrase }) {
+function taskState(live, approval, waits) {
+  if (approval) return "ask";
+  if (live) return "work";
+  if (waits) return "waiting";
+  return "idle";
+}
+var STATE_LABELS = { work: "Working", ask: "Waiting for approval", waiting: "Waiting for a teammate", idle: "Idle" };
+function TaskBadge({ state, done }) {
+  const label = done && state === "idle" ? t("Delivered") : t(STATE_LABELS[state]);
+  return (0, import_react7.createElement)("span", { className: "bt-task-badge", "data-state": done && state === "idle" ? "done" : state }, label);
+}
+function taskRows(live, approval, waits, room2, phrase) {
+  const rows = [];
+  if (live) rows.push({ key: "doing", live: true, text: phrase(live) });
+  if (approval) rows.push({ key: "ask", text: t("Waiting for your approval to run {tool}", { tool: approval.tool }) });
+  if (waits) {
+    const names = (waits.bots ?? []).length ? t("{names} in another chat", { names: waits.bots.join(", ") }) : null;
+    const rooms = (waits.rooms ?? []).length ? t("{names} in a group", { names: waits.rooms.join(", ") }) : null;
+    rows.push({ key: "waiting", text: [t("Waiting for"), names, rooms].filter(Boolean).join(" ") });
+  }
+  if (room2) rows.push({ key: "room", text: t("Working in {room}", { room: room2 }) });
+  return rows;
+}
+function TaskCard({ target, self, done, message, when: when3, replyTo, roster, actions, useWork, phrase }) {
   const [open, setOpen] = (0, import_react7.useState)(false);
   const liveKey = useWork ? useWork((work) => JSON.stringify(work.bots?.[target.id] ?? null)) : "null";
   const live = JSON.parse(liveKey);
+  const askKey = useWork ? useWork((work) => JSON.stringify((work.approvals ?? []).find((entry) => entry.botId === target.id) ?? null)) : "null";
+  const approval = JSON.parse(askKey);
+  const waitKey = useWork ? useWork((work) => JSON.stringify(work.waiting?.[target.id] ?? null)) : "null";
+  const waits = JSON.parse(waitKey);
   const [now, setNow] = (0, import_react7.useState)(Date.now);
   (0, import_react7.useEffect)(() => {
     if (live === null) return void 0;
@@ -4545,8 +4587,11 @@ function TaskCard({ target, self, done, message, when: when3, replyTo, actions, 
     return () => clearInterval(timer);
   }, [live]);
   const minutes = live === null ? 0 : Math.floor((now - live.since) / 6e4);
-  const state = live !== null ? phrase(live) : done ? t("Delivered") : t("Sending…");
+  const state = taskState(live, approval, waits);
+  const doing = live !== null ? phrase(live) : done ? t("Delivered") : t("Sending…");
   const chips = [when3 === "queue" ? t("Queued") : t("Now"), replyTo === "user" ? t("Reply to you") : t("Reply to me")];
+  const room2 = roster?.roomsById?.[live?.roomId]?.name ?? null;
+  const rows = taskRows(live, approval, waits, room2, phrase);
   const long = typeof message === "string" && message.length > 160;
   return (0, import_react7.createElement)(
     "div",
@@ -4569,13 +4614,23 @@ function TaskCard({ target, self, done, message, when: when3, replyTo, actions, 
       (0, import_react7.createElement)(
         "span",
         { className: "bt-task-state" },
-        (0, import_react7.createElement)("span", { className: "bt-task-doing" }, live !== null ? `${state}…` : state),
+        (0, import_react7.createElement)("span", { className: "bt-task-doing" }, live !== null ? `${doing}…` : doing),
         minutes >= 1 ? (0, import_react7.createElement)("span", { className: "bt-task-time" }, ` · ${t("{n} min", { n: minutes })}`) : null
       )
     ),
-    (0, import_react7.createElement)("div", { className: "bt-task-chips" }, chips.map((chip) => (0, import_react7.createElement)("span", { key: chip, className: "bt-task-chip" }, chip))),
+    (0, import_react7.createElement)(
+      "div",
+      { className: "bt-task-chips" },
+      (0, import_react7.createElement)(TaskBadge, { state, done }),
+      ...chips.map((chip) => (0, import_react7.createElement)("span", { key: chip, className: "bt-task-chip" }, chip))
+    ),
     message ? (0, import_react7.createElement)("div", { className: "bt-task-text", "data-open": open ? "" : void 0 }, message) : null,
-    long ? (0, import_react7.createElement)("button", { type: "button", className: "bt-task-more", onClick: () => setOpen((value) => !value) }, open ? t("Show less") : t("Show more")) : null,
+    rows.length ? (0, import_react7.createElement)(
+      "ol",
+      { className: "bt-task-steps", "data-open": open ? "" : void 0 },
+      rows.map((row) => (0, import_react7.createElement)("li", { key: row.key, className: "bt-task-step", "data-live": row.live ? "" : void 0 }, row.text))
+    ) : null,
+    long || rows.length ? (0, import_react7.createElement)("button", { type: "button", className: "bt-task-more", onClick: () => setOpen((value) => !value) }, open ? t("Show less") : t("Show more")) : null,
     (0, import_react7.createElement)(
       "div",
       { className: "bt-task-actions" },
@@ -4594,8 +4649,19 @@ var TASK_CSS = `
 .bt-task-state{flex:0 1 auto;min-width:0;display:inline-flex;align-items:baseline;color:var(--bt-ink-2)}
 .bt-task-doing{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bt-task-time{flex:none;color:var(--bt-ink-3)}
-.bt-task-chips{display:flex;gap:6px;flex-wrap:wrap}
+.bt-task-chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .bt-task-chip{font-size:11px;line-height:16px;padding:0 6px;border-radius:999px;border:1px solid var(--bt-line);color:var(--bt-ink-3);white-space:nowrap}
+.bt-task-badge{font-size:11px;line-height:16px;padding:0 6px;border-radius:999px;border:1px solid var(--bt-line);color:var(--bt-ink-2);white-space:nowrap}
+.bt-task-badge[data-state=work]{border-color:var(--bt-main);color:var(--bt-ink)}
+.bt-task-badge[data-state=ask]{color:var(--bt-ink)}
+.bt-task-badge[data-state=waiting]{color:var(--bt-ink-2)}
+.bt-task-badge[data-state=done]{color:var(--bt-ink-3)}
+.bt-task-steps{display:none;flex-direction:column;gap:4px;margin:0;padding:0;list-style:none;color:var(--bt-ink-2)}
+.bt-task-steps[data-open]{display:flex}
+.bt-task-step{position:relative;padding-left:12px;overflow-wrap:anywhere}
+.bt-task-step::before{content:'';position:absolute;left:0;top:7px;width:4px;height:4px;border-radius:50%;background:var(--bt-line)}
+.bt-task-step[data-live]{color:var(--bt-ink)}
+.bt-task-step[data-live]::before{background:var(--bt-ink)}
 .bt-task-text{color:var(--bt-ink);white-space:pre-wrap;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .bt-task-text[data-open]{display:block;-webkit-line-clamp:unset}
 .bt-task-more{align-self:flex-start;padding:0;border:0;background:none;color:var(--bt-ink-3);font:inherit;font-size:11px;cursor:pointer}
@@ -4759,6 +4825,7 @@ function renderCall(call2, { sessionId, roster, actions, useUi, useWork, findBot
         message: String(arg("message") ?? ""),
         when: arg("when") === "queue" ? "queue" : "now",
         replyTo: arg("reply_to") === "user" ? "user" : "me",
+        roster,
         actions,
         useWork,
         phrase: workPhrase
@@ -5047,7 +5114,7 @@ var doingOf = ({ tool, said, note, target, switching }) => ({ tool, said, note, 
 var workLine = (lead, doing, more) => (0, import_react9.createElement)(Shimmer, null, `${lead} · ${workPhrase(doing)}…${more > 0 ? ` +${more}` : ""}`);
 var waitingFor = (roster, waits) => {
   const names = [...(waits?.bots ?? []).map((id) => roster.byId[id]?.name), ...(waits?.rooms ?? []).map((id) => roster.roomsById[id]?.name)].filter(Boolean);
-  return names.length === 0 ? "" : t("Waiting for {names}", { names: names.join(t(" and ")) });
+  return t("Waiting for {names}", { names: names.length === 0 ? t("a teammate") : names.join(t(" and ")) });
 };
 function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessionRetainInfo, useActivity, useWork, wide, marked }) {
   const id = bot.id;
@@ -11413,21 +11480,49 @@ var import_react32 = require("react");
 var NO_WORK = { bots: {}, rooms: {}, approvals: [] };
 var FACES_MAX = 3;
 var DOCK_EXIT_MS = 160;
+var STUCK_MS = 30 * 60 * 1e3;
+function botWork(id, work = NO_WORK) {
+  const roomId = Object.entries(work.rooms ?? {}).find(([, entries2]) => entries2.some((entry) => entry.botId === id))?.[0];
+  const local = roomId ? work.rooms[roomId].find((entry) => entry.botId === id) : void 0;
+  const own = work.bots?.[id];
+  const doing = local ? { ...local, roomId } : own;
+  return {
+    id,
+    roomId: doing?.roomId,
+    doing,
+    since: doing?.since,
+    approvals: (work.approvals ?? []).filter((entry) => entry.botId === id),
+    waits: work.waiting?.[id]
+  };
+}
+function workStatus(entry) {
+  if ((entry?.approvals ?? []).length > 0) return "ask";
+  if (entry?.doing) return "work";
+  if (entry?.waits) return "waiting";
+  return "idle";
+}
+function looksStuck(entry, now) {
+  if (!entry?.doing || entry.doing.switching || entry.doing.tool === void 0) return false;
+  return entry.since !== void 0 && now - entry.since >= STUCK_MS;
+}
 function memberWork(room2, work = NO_WORK) {
   const here = work.rooms?.[room2.id] ?? [];
   return room2.members.map((id) => {
-    const approvals = (work.approvals ?? []).filter((entry) => entry.botId === id);
-    const local = here.find((entry) => entry.botId === id);
+    const entry = botWork(id, work);
+    const local = here.find((item) => item.botId === id);
     const doing = local ? { ...local, roomId: room2.id } : work.bots?.[id];
-    return { id, approvals, doing, here: local !== void 0, state: approvals.length > 0 ? "ask" : doing ? "work" : "idle" };
+    const state = entry.approvals.length > 0 ? "ask" : doing ? "work" : entry.waits ? "waiting" : "idle";
+    return { id, approvals: entry.approvals, doing, here: local !== void 0, waits: entry.waits, state };
   });
 }
 function busyMembers(room2, work, roster) {
   const busy = memberWork(room2, work).filter((entry) => entry.state !== "idle" && roster.byId[entry.id]);
-  return [...busy.filter((entry) => entry.state === "ask"), ...busy.filter((entry) => entry.state === "work")].map((entry) => ({ ...entry, bot: roster.byId[entry.id] }));
+  const rank = { ask: 0, work: 1, waiting: 2 };
+  return [...busy].sort((a, b) => (rank[a.state] ?? 3) - (rank[b.state] ?? 3)).map((entry) => ({ ...entry, bot: roster.byId[entry.id] }));
 }
 var dockMembers = (busy) => busy.filter((entry) => !(entry.state === "work" && entry.here && entry.doing.speaking === true));
 var workState = (doing) => doing?.switching ? "thinking" : toolState(doing?.tool ?? "");
+var memberState = (entry) => entry?.state === "ask" ? "alert" : entry?.state === "waiting" ? "waiting" : workState(entry?.doing);
 function botGroupWork(botId, work, roster) {
   return Object.entries(work.rooms ?? {}).flatMap(([roomId, entries2]) => {
     const entry = entries2.find((item) => item.botId === botId);
@@ -11438,21 +11533,33 @@ function botGroupWork(botId, work, roster) {
 function summaryText(busy) {
   const asks = busy.filter((entry) => entry.state === "ask");
   const workers = busy.filter((entry) => entry.state === "work");
+  const waits = busy.filter((entry) => entry.state === "waiting");
   const names = asks.slice(0, 2).map((entry) => entry.bot.name);
   const waiting = asks.length === 0 ? "" : asks.length === 1 ? t("{name} is waiting for your approval", { name: names[0] }) : asks.length === 2 ? t("{first} and {second} are waiting for your approval", { first: names[0], second: names[1] }) : t("{first}, {second} and {count} more are waiting for your approval", { first: names[0], second: names[1], count: asks.length - 2, total: asks.length });
   const first = workers[0];
   const doing = first ? `${first.bot.name} · ${workPhrase(first.doing)}…${workers.length > 1 ? ` +${workers.length - 1}` : ""}` : "";
-  return { waiting, doing };
+  const handoff = waits.length === 0 ? "" : `${waits[0].bot.name} · ${waitLabel(waits[0].waits)}`;
+  return { waiting, doing: [doing, handoff].filter(Boolean).join(" · ") };
+}
+function waitLabel(waits) {
+  const names = waits?.names ?? [];
+  if (names.length === 0) return t("Waiting for a teammate");
+  return t("Waiting for {names}", { names: names.join(t(" and ")) });
+}
+function waitNames(waits, roster) {
+  if (!waits) return void 0;
+  const names = [...(waits.bots ?? []).map((id) => roster.byId[id]?.name), ...(waits.rooms ?? []).map((id) => roster.roomsById[id]?.name)].filter(Boolean);
+  return { names };
 }
 function dockModel(sessionId, roster, work) {
   const room2 = roster.roomsById[sessionId];
   if (room2) {
     const busy = dockMembers(busyMembers(room2, work, roster));
     if (busy.length === 0) return null;
-    const { waiting, doing } = summaryText(busy);
+    const { waiting, doing } = summaryText(busy.map((entry) => ({ ...entry, waits: waitNames(entry.waits, roster) })));
     return {
       open: { details: room2.id },
-      faces: busy.slice(0, FACES_MAX).map((entry) => ({ id: entry.id, ask: entry.state === "ask", state: workState(entry.doing) })),
+      faces: busy.slice(0, FACES_MAX).map((entry) => ({ id: entry.id, ask: entry.state === "ask", wait: entry.state === "waiting", state: memberState(entry) })),
       waiting,
       doing
     };
@@ -11469,11 +11576,11 @@ function dockModel(sessionId, roster, work) {
     doing: `${t("in {name}", { name: first.room.name })} · ${workPhrase(first.doing)}…${groups.length > 1 ? ` +${groups.length - 1}` : ""}`
   };
 }
-function Face({ bot, ask, state }) {
+function Face({ bot, ask, wait, state }) {
   return (0, import_react32.createElement)(
     "span",
-    { className: "bt-mw-face", "data-ask": ask || void 0 },
-    (0, import_react32.createElement)(BotMark, { bot, size: 20, state: ask ? "alert" : state })
+    { className: "bt-mw-face", "data-ask": ask || void 0, "data-wait": wait || void 0 },
+    (0, import_react32.createElement)(BotMark, { bot, size: 20, state: ask ? "alert" : wait ? "waiting" : state })
   );
 }
 function useFitWidth(inner, key) {
@@ -11553,12 +11660,14 @@ function ApprovalCard({ approval, bot, actions }) {
 }
 function MemberState({ entry, bot, room: room2, roster, now }) {
   if (entry?.state === "ask") return (0, import_react32.createElement)("span", { className: "bt-member-state bt-mw-ask" }, `${t("Waiting for your approval")}${since(now, entry.approvals[0].at)}`);
+  if (entry?.state === "waiting") return (0, import_react32.createElement)("span", { className: "bt-member-state bt-mw-wait" }, waitLabel(waitNames(entry.waits, roster)));
   if (entry?.state !== "work") return bot.role ? (0, import_react32.createElement)("span", { className: "bt-member-state" }, bot.role) : null;
   const where = entry.doing.roomId === room2.id ? "" : entry.doing.roomId ? t("in {name}", { name: roster.roomsById[entry.doing.roomId]?.name ?? t("a group chat") }) : t("in its own chat");
+  const stuck = looksStuck({ doing: entry.doing, since: entry.doing.since }, now);
   return (0, import_react32.createElement)(
     "span",
-    { className: "bt-member-state" },
-    (0, import_react32.createElement)(Shimmer, null, `${workPhrase(entry.doing)}…`),
+    { className: "bt-member-state", "data-stuck": stuck || void 0 },
+    stuck ? t("Maybe stuck") : (0, import_react32.createElement)(Shimmer, null, `${workPhrase(entry.doing)}…`),
     where ? ` ${where}` : "",
     since(now, entry.doing.since)
   );
@@ -11579,7 +11688,7 @@ function MemberApprovals({ entry, bot, actions }) {
 function useMemberWork(room2, useWork) {
   const work = useWork?.((value) => value) ?? NO_WORK;
   const entries2 = room2 ? memberWork(room2, work) : [];
-  const now = useNow2(entries2.some((entry) => entry.state !== "idle"));
+  const now = useNow2(entries2.some((entry) => entry.state === "work" || entry.state === "ask"));
   return { entries: entries2, now };
 }
 var MEMBER_CSS = `
@@ -11593,9 +11702,11 @@ var MEMBER_CSS = `
 .bt-mw-face{position:relative;display:inline-flex;flex:none;border-radius:50%;background:var(--bt-main);box-shadow:0 0 0 2px var(--bt-main);animation:bt-mw-seat .26s cubic-bezier(.34,1.56,.64,1) backwards}
 .bt-mw-face+.bt-mw-face{margin-left:-5px}
 .bt-mw-face[data-ask]::after{content:"";position:absolute;right:-1px;bottom:-1px;width:7px;height:7px;border-radius:50%;background:#e3a008;box-shadow:0 0 0 1.5px var(--bt-main)}
+.bt-mw-face[data-wait]::after{content:"";position:absolute;right:-1px;bottom:-1px;width:7px;height:7px;border-radius:50%;background:var(--bt-ink-3);box-shadow:0 0 0 1.5px var(--bt-main)}
 .bt-mw-label{display:inline-flex;align-items:center;gap:5px;min-width:0;max-width:min(420px,58vw);animation:bt-mw-swap .22s ease-out backwards}
 .bt-mw-label>*{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bt-mw-ask{color:#b7791f;flex:none}
+.bt-mw-wait{color:var(--bt-ink-2);flex:0 1 auto}
 .bt-mw-dot{flex:none;color:var(--bt-ink-3)}
 .bt-mw-doing{flex:0 1 auto}
 body[data-ds-dark-theme] .bt-mw-ask{color:#f0b84a}
@@ -11615,12 +11726,27 @@ body[data-ds-dark-theme] .bt-mw-ask{color:#f0b84a}
 .bt-member-line>.bt-tag{font-size:11px;line-height:15px;padding:0 5px}
 .bt-member-state{min-width:0;font-size:12px;line-height:16px;color:var(--bt-ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bt-member-state.bt-mw-ask{color:#b7791f}
+.bt-member-state.bt-mw-wait{color:var(--bt-ink-2)}
+.bt-member-state[data-stuck]{color:var(--bt-ink-2)}
 body[data-ds-dark-theme] .bt-member-state.bt-mw-ask{color:#f0b84a}
 .bt-member-stop{flex:none;height:26px;padding:0 11px;border:0;border-radius:13px;background:var(--bt-main);box-shadow:inset 0 0 0 .5px var(--bt-line-2);color:var(--bt-ink-2);font:inherit;font-size:12px;cursor:pointer;transition:background-color .12s ease,color .12s ease,${spring(SPRING_TAP, "scale")}}
 .bt-member-stop:hover{background:var(--bt-active);color:var(--bt-ink)}
 .bt-member-stop:active:not(:disabled){scale:.94}
 .bt-member-stop:disabled{opacity:.5;cursor:default}
 .bt-member-cards{display:flex;flex-direction:column;gap:6px;padding:2px 8px 8px 50px}
+/* The details panel's current-work block: one line of state, one of what it does now. */
+.bt-work{display:flex;flex-direction:column;gap:4px}
+.bt-work-row{display:flex;align-items:baseline;justify-content:space-between;gap:8px;font-size:12px;line-height:18px}
+.bt-work-state{color:var(--bt-ink-2)}
+.bt-work-state[data-state=work]{color:var(--bt-ink)}
+.bt-work-state[data-state=ask]{color:#b7791f}
+.bt-work-state[data-stuck]{color:var(--bt-danger)}
+.bt-work-since{flex:none;color:var(--bt-ink-3);font-variant-numeric:tabular-nums}
+.bt-work-doing,.bt-work-waits{display:flex;align-items:baseline;gap:6px;min-width:0;font-size:12px;line-height:17px;color:var(--bt-ink-2)}
+.bt-work-phrase{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--bt-ink)}
+.bt-work-where{flex:none;color:var(--bt-ink-3)}
+.bt-work-elapsed{flex:none;margin-left:auto;color:var(--bt-ink-3);font-variant-numeric:tabular-nums}
+body[data-ds-dark-theme] .bt-work-state[data-state=ask]{color:#f0b84a}
 .bt-mw-card{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border-radius:12px;background:var(--bt-hover);font-size:12px;line-height:17px;color:var(--bt-ink-2);animation:bt-rise .2s ease-out backwards}
 .bt-mw-tool{font-weight:600;color:var(--bt-ink)}
 .bt-mw-text{color:var(--bt-ink);overflow-wrap:anywhere}
@@ -11751,6 +11877,58 @@ function MemberPile({ room: room2, roster }) {
   );
 }
 var markOf = (entry) => entry?.state === "ask" ? "alert" : entry?.state === "work" ? workState(entry.doing) : "idle";
+var workKey = (work, id) => JSON.stringify({ own: work.bots?.[id] ?? null, wait: work.waiting?.[id] ?? null, ask: (work.approvals ?? []).filter((entry) => entry.botId === id).map((entry) => entry.id), rooms: Object.fromEntries(Object.entries(work.rooms ?? {}).filter(([, entries2]) => entries2.some((entry) => entry.botId === id))) });
+function useWorkClock(live) {
+  const [now, setNow] = (0, import_react33.useState)(Date.now);
+  (0, import_react33.useEffect)(() => {
+    if (!live) return void 0;
+    const timer = setInterval(() => setNow(Date.now()), 3e4);
+    return () => clearInterval(timer);
+  }, [live]);
+  return now;
+}
+function statusLabel(state) {
+  if (state === "work") return t("Working");
+  if (state === "ask") return t("Waiting for your approval");
+  if (state === "waiting") return t("Waiting for a teammate");
+  return t("Idle");
+}
+function CurrentWork({ bot, roster, useWork }) {
+  const key = useWork ? useWork((work) => workKey(work, bot.id)) : null;
+  const entry = JSON.parse(key ?? "null");
+  const live = entry !== null && (entry.own !== null || entry.wait !== null || entry.ask.length > 0);
+  const now = useWorkClock(live);
+  const roomId = entry ? Object.keys(entry.rooms)[0] : void 0;
+  const doing = entry?.own ?? (roomId ? { ...entry.rooms[roomId][0], roomId } : void 0);
+  const state = workStatus({ approvals: entry?.ask, doing, waits: entry?.wait });
+  const waits = waitNames(entry?.wait, roster);
+  const stuck = looksStuck({ doing, since: doing?.since }, now);
+  const where = doing?.roomId ? roster.roomsById[doing.roomId]?.name : void 0;
+  return (0, import_react33.createElement)(
+    "div",
+    { className: "bt-work" },
+    (0, import_react33.createElement)("div", { className: "bt-section-title" }, t("Current work")),
+    (0, import_react33.createElement)(
+      "div",
+      { className: "bt-work-row" },
+      (0, import_react33.createElement)(
+        "span",
+        { className: "bt-work-state", "data-state": state, "data-stuck": stuck || void 0 },
+        stuck ? t("Maybe stuck") : statusLabel(state)
+      ),
+      doing?.since !== void 0 ? (0, import_react33.createElement)("span", { className: "bt-work-since" }, t("since {when}", { when: timeOf(doing.since) })) : null
+    ),
+    state === "work" ? (0, import_react33.createElement)(
+      "div",
+      { className: "bt-work-doing" },
+      (0, import_react33.createElement)("span", { className: "bt-work-phrase" }, `${workPhrase(doing)}…`),
+      where ? (0, import_react33.createElement)("span", { className: "bt-work-where" }, t("in {name}", { name: where })) : null,
+      (0, import_react33.createElement)("span", { className: "bt-work-elapsed" }, elapsedLabel(now - doing.since))
+    ) : null,
+    state === "waiting" && waits ? (0, import_react33.createElement)("div", { className: "bt-work-waits" }, waitLabel(waits)) : null
+  );
+}
+var timeOf = (at) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 function MemberRow({ member, entry, room: room2, roster, actions, now }) {
   return (0, import_react33.createElement)(
     "div",
@@ -11936,6 +12114,7 @@ function DetailsDrawer({ sessionId, startRenaming, startTab, hasStrip, roster, a
       errorLine,
       room2 && tab === "details" ? (0, import_react33.createElement)(GroupOverview, { room: room2, roster, actions, usage, useWork, openSettings: () => setView("settings") }) : null,
       bot && tab === "details" ? [
+        (0, import_react33.createElement)(CurrentWork, { key: "work", bot, roster, useWork }),
         (0, import_react33.createElement)(
           "div",
           { key: "model", className: "bt-drawer-model" },
@@ -13726,7 +13905,7 @@ function apply(ctx) {
   }, "ds-bot: follow other windows");
   const activity = createSource({});
   const work = createSource({ bots: {}, approvals: [] });
-  let workKey = "";
+  let workKey2 = "";
   const live = createSource({});
   const cards = createSource({});
   const turnClock = createSource({});
@@ -13769,8 +13948,8 @@ function apply(ctx) {
       activity.set(value.activity ?? {});
     }
     const nextWork = JSON.stringify(value.work ?? null);
-    if (nextWork !== workKey) {
-      workKey = nextWork;
+    if (nextWork !== workKey2) {
+      workKey2 = nextWork;
       work.set(value.work ?? { bots: {}, approvals: [] });
     }
     noteMemoryNews(value.memoryNews ?? {});

@@ -595,14 +595,50 @@ export function workPhrase(doing) {
   return target ? `${label} · ${target}` : label
 }
 
+// Where the target stands, from the work view alone. `ask` and `waiting` outrank `work`:
+// a Bot that holds a turn open on either runs no call of its own.
+function taskState(live, approval, waits) {
+  if (approval) return 'ask'
+  if (live) return 'work'
+  if (waits) return 'waiting'
+  return 'idle'
+}
+
+const STATE_LABELS = { work: 'Working', ask: 'Waiting for approval', waiting: 'Waiting for a teammate', idle: 'Idle' }
+
+function TaskBadge({ state, done }) {
+  // A settled card reports the hand-off, not a state it no longer has.
+  const label = done && state === 'idle' ? t('Delivered') : t(STATE_LABELS[state])
+  return h('span', { className: 'bt-task-badge', 'data-state': done && state === 'idle' ? 'done' : state }, label)
+}
+
+// The timeline rows: the turn's one step the work view can name, then whatever holds the
+// target up. DSH keeps each Bot's own steps in that Bot's session, out of reach here.
+function taskRows(live, approval, waits, room, phrase) {
+  const rows = []
+  if (live) rows.push({ key: 'doing', live: true, text: phrase(live) })
+  if (approval) rows.push({ key: 'ask', text: t('Waiting for your approval to run {tool}', { tool: approval.tool }) })
+  if (waits) {
+    const names = (waits.bots ?? []).length ? t('{names} in another chat', { names: waits.bots.join(', ') }) : null
+    const rooms = (waits.rooms ?? []).length ? t('{names} in a group', { names: waits.rooms.join(', ') }) : null
+    rows.push({ key: 'waiting', text: [t('Waiting for'), names, rooms].filter(Boolean).join(' ') })
+  }
+  if (room) rows.push({ key: 'room', text: t('Working in {room}', { room }) })
+  return rows
+}
+
 // The work one Bot handed to another with message_bot: whom it went to, the task, and
 // what that Bot does with it right now. The sender's chat draws it instead of a line.
-function TaskCard({ target, self, done, message, when, replyTo, actions, useWork, phrase }) {
+function TaskCard({ target, self, done, message, when, replyTo, roster, actions, useWork, phrase }) {
   const [open, setOpen] = useState(false)
   // The work view is a whole object; a JSON key keeps the subscription stable, as the
   // sidebar's work rows do.
   const liveKey = useWork ? useWork(work => JSON.stringify(work.bots?.[target.id] ?? null)) : 'null'
   const live = JSON.parse(liveKey)
+  const askKey = useWork ? useWork(work => JSON.stringify((work.approvals ?? []).find(entry => entry.botId === target.id) ?? null)) : 'null'
+  const approval = JSON.parse(askKey)
+  const waitKey = useWork ? useWork(work => JSON.stringify(work.waiting?.[target.id] ?? null)) : 'null'
+  const waits = JSON.parse(waitKey)
   const [now, setNow] = useState(Date.now)
   useEffect(() => {
     if (live === null) return undefined
@@ -610,8 +646,11 @@ function TaskCard({ target, self, done, message, when, replyTo, actions, useWork
     return () => clearInterval(timer)
   }, [live])
   const minutes = live === null ? 0 : Math.floor((now - live.since) / 60_000)
-  const state = live !== null ? phrase(live) : done ? t('Delivered') : t('Sending…')
+  const state = taskState(live, approval, waits)
+  const doing = live !== null ? phrase(live) : done ? t('Delivered') : t('Sending…')
   const chips = [when === 'queue' ? t('Queued') : t('Now'), replyTo === 'user' ? t('Reply to you') : t('Reply to me')]
+  const room = roster?.roomsById?.[live?.roomId]?.name ?? null
+  const rows = taskRows(live, approval, waits, room, phrase)
   const long = typeof message === 'string' && message.length > 160
   return h('div', { className: 'bt-task', 'data-live': live !== null ? '' : undefined },
     h('div', { className: 'bt-task-head' },
@@ -625,11 +664,15 @@ function TaskCard({ target, self, done, message, when, replyTo, actions, useWork
       h('span', { className: 'bt-task-name' }, target.name),
       target.role ? h('span', { className: 'bt-task-role' }, target.role) : null),
       h('span', { className: 'bt-task-state' },
-        h('span', { className: 'bt-task-doing' }, live !== null ? `${state}…` : state),
+        h('span', { className: 'bt-task-doing' }, live !== null ? `${doing}…` : doing),
         minutes >= 1 ? h('span', { className: 'bt-task-time' }, ` · ${t('{n} min', { n: minutes })}`) : null)),
-    h('div', { className: 'bt-task-chips' }, chips.map(chip => h('span', { key: chip, className: 'bt-task-chip' }, chip))),
+    h('div', { className: 'bt-task-chips' },
+      h(TaskBadge, { state, done }),
+      ...chips.map(chip => h('span', { key: chip, className: 'bt-task-chip' }, chip))),
     message ? h('div', { className: 'bt-task-text', 'data-open': open ? '' : undefined }, message) : null,
-    long ? h('button', { type: 'button', className: 'bt-task-more', onClick: () => setOpen(value => !value) }, open ? t('Show less') : t('Show more')) : null,
+    rows.length ? h('ol', { className: 'bt-task-steps', 'data-open': open ? '' : undefined },
+      rows.map(row => h('li', { key: row.key, className: 'bt-task-step', 'data-live': row.live ? '' : undefined }, row.text))) : null,
+    (long || rows.length) ? h('button', { type: 'button', className: 'bt-task-more', onClick: () => setOpen(value => !value) }, open ? t('Show less') : t('Show more')) : null,
     h('div', { className: 'bt-task-actions' },
       h('button', { type: 'button', className: 'bt-task-btn', onClick: () => actions.openSession(target.id) }, t('Open chat')),
       h('button', { type: 'button', className: 'bt-task-btn', onClick: () => actions.openExchange(self?.id, target.id) }, t('Conversation'))))
@@ -645,8 +688,19 @@ export const TASK_CSS = `
 .bt-task-state{flex:0 1 auto;min-width:0;display:inline-flex;align-items:baseline;color:var(--bt-ink-2)}
 .bt-task-doing{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bt-task-time{flex:none;color:var(--bt-ink-3)}
-.bt-task-chips{display:flex;gap:6px;flex-wrap:wrap}
+.bt-task-chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .bt-task-chip{font-size:11px;line-height:16px;padding:0 6px;border-radius:999px;border:1px solid var(--bt-line);color:var(--bt-ink-3);white-space:nowrap}
+.bt-task-badge{font-size:11px;line-height:16px;padding:0 6px;border-radius:999px;border:1px solid var(--bt-line);color:var(--bt-ink-2);white-space:nowrap}
+.bt-task-badge[data-state=work]{border-color:var(--bt-main);color:var(--bt-ink)}
+.bt-task-badge[data-state=ask]{color:var(--bt-ink)}
+.bt-task-badge[data-state=waiting]{color:var(--bt-ink-2)}
+.bt-task-badge[data-state=done]{color:var(--bt-ink-3)}
+.bt-task-steps{display:none;flex-direction:column;gap:4px;margin:0;padding:0;list-style:none;color:var(--bt-ink-2)}
+.bt-task-steps[data-open]{display:flex}
+.bt-task-step{position:relative;padding-left:12px;overflow-wrap:anywhere}
+.bt-task-step::before{content:'';position:absolute;left:0;top:7px;width:4px;height:4px;border-radius:50%;background:var(--bt-line)}
+.bt-task-step[data-live]{color:var(--bt-ink)}
+.bt-task-step[data-live]::before{background:var(--bt-ink)}
 .bt-task-text{color:var(--bt-ink);white-space:pre-wrap;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .bt-task-text[data-open]{display:block;-webkit-line-clamp:unset}
 .bt-task-more{align-self:flex-start;padding:0;border:0;background:none;color:var(--bt-ink-3);font:inherit;font-size:11px;cursor:pointer}
@@ -793,6 +847,7 @@ function renderCall(call, { sessionId, roster, actions, useUi, useWork, findBot 
         message: String(arg('message') ?? ''),
         when: arg('when') === 'queue' ? 'queue' : 'now',
         replyTo: arg('reply_to') === 'user' ? 'user' : 'me',
+        roster,
         actions,
         useWork,
         phrase: workPhrase,

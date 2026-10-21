@@ -3,6 +3,8 @@ import { isMainOf } from './sources.js'
 import { HEADER, currentPart, stripHeader, usageOf } from './text.js'
 import { PlusIcon, ShareIcon, CloseIcon, ChevronLeftIcon, GearIcon } from './icons.js'
 import { botState, BotMark, BotAvatar } from './mark.js'
+import { workPhrase } from './cells.js'
+import { elapsedLabel } from './activity-row.js'
 import { GlobeIcon, Favicon } from './browser-pane.js'
 import { useEscape } from './overlay-hooks.js'
 import { BotSettingsForm } from './bot-settings.js'
@@ -12,7 +14,7 @@ import { FolderMenu } from './folder-menu.js'
 import { MemoryRow } from './memory-panel.js'
 import { ScheduleSummary } from './schedules.js'
 import { useGlide, useMorph } from './motion.js'
-import { MemberApprovals, MemberState, StopMemberWork, useMemberWork, workState } from './member-status.js'
+import { MemberApprovals, MemberState, StopMemberWork, looksStuck, useMemberWork, waitLabel, waitNames, workState, workStatus } from './member-status.js'
 import { PermissionPicker, presetDanger, presetName } from './permission-picker.js'
 import { t } from './i18n.js'
 
@@ -108,6 +110,61 @@ function MemberPile({ room, roster }) {
 }
 
 const markOf = entry => (entry?.state === 'ask' ? 'alert' : entry?.state === 'work' ? workState(entry.doing) : 'idle')
+
+// A work view is a whole object; a key keeps the subscription to what the row shows.
+const workKey = (work, id) => JSON.stringify({ own: work.bots?.[id] ?? null, wait: work.waiting?.[id] ?? null, ask: (work.approvals ?? []).filter(entry => entry.botId === id).map(entry => entry.id), rooms: Object.fromEntries(Object.entries(work.rooms ?? {}).filter(([, entries]) => entries.some(entry => entry.botId === id))) })
+
+// The clock behind "12 min" and the stuck threshold. It runs only while something
+// actually counts, so an idle panel redraws never.
+function useWorkClock(live) {
+  const [now, setNow] = useState(Date.now)
+  useEffect(() => {
+    if (!live) return undefined
+    const timer = setInterval(() => setNow(Date.now()), 30000)
+    return () => clearInterval(timer)
+  }, [live])
+  return now
+}
+
+// Written out as literals, so the i18n check finds every key. `idle` shows the section
+// on a Bot with nothing to do rather than hiding it, which would read as broken.
+function statusLabel(state) {
+  if (state === 'work') return t('Working')
+  if (state === 'ask') return t('Waiting for your approval')
+  if (state === 'waiting') return t('Waiting for a teammate')
+  return t('Idle')
+}
+
+// The one line that answers "is this Bot actually working": what it does now, since
+// when, and whether the call has been held long enough to look stuck.
+function CurrentWork({ bot, roster, useWork }) {
+  const key = useWork ? useWork(work => workKey(work, bot.id)) : null
+  const entry = JSON.parse(key ?? 'null')
+  const live = entry !== null && (entry.own !== null || entry.wait !== null || entry.ask.length > 0)
+  const now = useWorkClock(live)
+  // `rooms` is filtered to this Bot's own rows, so the group it works in is the one key.
+  const roomId = entry ? Object.keys(entry.rooms)[0] : undefined
+  const doing = entry?.own ?? (roomId ? { ...entry.rooms[roomId][0], roomId } : undefined)
+  const state = workStatus({ approvals: entry?.ask, doing, waits: entry?.wait })
+  const waits = waitNames(entry?.wait, roster)
+  const stuck = looksStuck({ doing, since: doing?.since }, now)
+  const where = doing?.roomId ? roster.roomsById[doing.roomId]?.name : undefined
+  return h('div', { className: 'bt-work' },
+    h('div', { className: 'bt-section-title' }, t('Current work')),
+    h('div', { className: 'bt-work-row' },
+      h('span', { className: 'bt-work-state', 'data-state': state, 'data-stuck': stuck || undefined },
+        stuck ? t('Maybe stuck') : statusLabel(state)),
+      doing?.since !== undefined ? h('span', { className: 'bt-work-since' }, t('since {when}', { when: timeOf(doing.since) })) : null),
+    state === 'work'
+      ? h('div', { className: 'bt-work-doing' },
+          h('span', { className: 'bt-work-phrase' }, `${workPhrase(doing)}…`),
+          where ? h('span', { className: 'bt-work-where' }, t('in {name}', { name: where })) : null,
+          h('span', { className: 'bt-work-elapsed' }, elapsedLabel(now - doing.since)))
+      : null,
+    state === 'waiting' && waits ? h('div', { className: 'bt-work-waits' }, waitLabel(waits)) : null)
+}
+
+const timeOf = at => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
 // One member: its mark, name and what it is doing on one surface that opens its chat;
 // Stop beside it while it works here, and the approvals it waits on below.
@@ -238,6 +295,7 @@ export function DetailsDrawer({ sessionId, startRenaming, startTab, hasStrip, ro
       errorLine,
       room && tab === 'details' ? h(GroupOverview, { room, roster, actions, usage, useWork, openSettings: () => setView('settings') }) : null,
       bot && tab === 'details' ? [
+        h(CurrentWork, { key: 'work', bot, roster, useWork }),
         h('div', { key: 'model', className: 'bt-drawer-model' },
           h('div', { className: 'bt-section-title' }, t('Model')),
           h(ModelMenu, { bot, roster, actions, run, wide: true }),
