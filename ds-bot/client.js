@@ -4555,19 +4555,24 @@ function taskState(live, approval, waits) {
   if (waits) return "waiting";
   return "idle";
 }
-var STATE_LABELS = { work: "Working", ask: "Waiting for approval", waiting: "Waiting for a teammate", idle: "Idle" };
-function TaskBadge({ state, done }) {
-  const label = done && state === "idle" ? t("Delivered") : t(STATE_LABELS[state]);
-  return (0, import_react7.createElement)("span", { className: "bt-task-badge", "data-state": done && state === "idle" ? "done" : state }, label);
+var STATE_LABELS = { work: "Working", ask: "Waiting for approval", waiting: "Waiting for a teammate" };
+function TaskBadge({ state }) {
+  if (state === "idle") return null;
+  return (0, import_react7.createElement)("span", { className: "bt-task-badge", "data-state": state }, t(STATE_LABELS[state]));
 }
-function taskRows(live, approval, waits, room2, phrase) {
+function taskRows(live, approval, waits, room2, roster, phrase) {
   const rows = [];
   if (live) rows.push({ key: "doing", live: true, text: phrase(live) });
   if (approval) rows.push({ key: "ask", text: t("Waiting for your approval to run {tool}", { tool: approval.tool }) });
   if (waits) {
-    const names = (waits.bots ?? []).length ? t("{names} in another chat", { names: waits.bots.join(", ") }) : null;
-    const rooms = (waits.rooms ?? []).length ? t("{names} in a group", { names: waits.rooms.join(", ") }) : null;
-    rows.push({ key: "waiting", text: [t("Waiting for"), names, rooms].filter(Boolean).join(" ") });
+    const namesOf = (ids, pick2) => (ids ?? []).map(pick2).filter(Boolean);
+    const bots = namesOf(waits.bots, (id) => roster?.byId?.[id]?.name);
+    const rooms = namesOf(waits.rooms, (id) => roster?.roomsById?.[id]?.name);
+    const parts = [
+      bots.length > 0 ? t("{names} in another chat", { names: bots.join(t(" and ")) }) : null,
+      rooms.length > 0 ? t("{names} in a group", { names: rooms.join(t(" and ")) }) : null
+    ].filter(Boolean);
+    rows.push({ key: "waiting", text: `${t("Waiting for")} ${parts.length > 0 ? parts.join(t(" and ")) : t("a teammate")}` });
   }
   if (room2) rows.push({ key: "room", text: t("Working in {room}", { room: room2 }) });
   return rows;
@@ -4591,7 +4596,7 @@ function TaskCard({ target, self, done, message, when: when3, replyTo, roster, a
   const doing = live !== null ? phrase(live) : done ? t("Delivered") : t("Sending…");
   const chips = [when3 === "queue" ? t("Queued") : t("Now"), replyTo === "user" ? t("Reply to you") : t("Reply to me")];
   const room2 = roster?.roomsById?.[live?.roomId]?.name ?? null;
-  const rows = taskRows(live, approval, waits, room2, phrase);
+  const rows = taskRows(live, approval, waits, room2, roster, phrase);
   const long = typeof message === "string" && message.length > 160;
   return (0, import_react7.createElement)(
     "div",
@@ -4621,7 +4626,7 @@ function TaskCard({ target, self, done, message, when: when3, replyTo, roster, a
     (0, import_react7.createElement)(
       "div",
       { className: "bt-task-chips" },
-      (0, import_react7.createElement)(TaskBadge, { state, done }),
+      (0, import_react7.createElement)(TaskBadge, { state }),
       ...chips.map((chip) => (0, import_react7.createElement)("span", { key: chip, className: "bt-task-chip" }, chip))
     ),
     message ? (0, import_react7.createElement)("div", { className: "bt-task-text", "data-open": open ? "" : void 0 }, message) : null,

@@ -604,24 +604,32 @@ function taskState(live, approval, waits) {
   return 'idle'
 }
 
-const STATE_LABELS = { work: 'Working', ask: 'Waiting for approval', waiting: 'Waiting for a teammate', idle: 'Idle' }
+const STATE_LABELS = { work: 'Working', ask: 'Waiting for approval', waiting: 'Waiting for a teammate' }
 
-function TaskBadge({ state, done }) {
-  // A settled card reports the hand-off, not a state it no longer has.
-  const label = done && state === 'idle' ? t('Delivered') : t(STATE_LABELS[state])
-  return h('span', { className: 'bt-task-badge', 'data-state': done && state === 'idle' ? 'done' : state }, label)
+// A badge only for a target that is held up or at work. On an idle one the head line
+// already reads "Sending…" or "Delivered", and a badge would put a second, contradicting
+// word beside it.
+function TaskBadge({ state }) {
+  if (state === 'idle') return null
+  return h('span', { className: 'bt-task-badge', 'data-state': state }, t(STATE_LABELS[state]))
 }
 
 // The timeline rows: the turn's one step the work view can name, then whatever holds the
 // target up. DSH keeps each Bot's own steps in that Bot's session, out of reach here.
-function taskRows(live, approval, waits, room, phrase) {
+function taskRows(live, approval, waits, room, roster, phrase) {
   const rows = []
   if (live) rows.push({ key: 'doing', live: true, text: phrase(live) })
   if (approval) rows.push({ key: 'ask', text: t('Waiting for your approval to run {tool}', { tool: approval.tool }) })
   if (waits) {
-    const names = (waits.bots ?? []).length ? t('{names} in another chat', { names: waits.bots.join(', ') }) : null
-    const rooms = (waits.rooms ?? []).length ? t('{names} in a group', { names: waits.rooms.join(', ') }) : null
-    rows.push({ key: 'waiting', text: [t('Waiting for'), names, rooms].filter(Boolean).join(' ') })
+    // The waits name ids; the card shows names, and a gone teammate still reads as one.
+    const namesOf = (ids, pick) => (ids ?? []).map(pick).filter(Boolean)
+    const bots = namesOf(waits.bots, id => roster?.byId?.[id]?.name)
+    const rooms = namesOf(waits.rooms, id => roster?.roomsById?.[id]?.name)
+    const parts = [
+      bots.length > 0 ? t('{names} in another chat', { names: bots.join(t(' and ')) }) : null,
+      rooms.length > 0 ? t('{names} in a group', { names: rooms.join(t(' and ')) }) : null,
+    ].filter(Boolean)
+    rows.push({ key: 'waiting', text: `${t('Waiting for')} ${parts.length > 0 ? parts.join(t(' and ')) : t('a teammate')}` })
   }
   if (room) rows.push({ key: 'room', text: t('Working in {room}', { room }) })
   return rows
@@ -650,7 +658,7 @@ function TaskCard({ target, self, done, message, when, replyTo, roster, actions,
   const doing = live !== null ? phrase(live) : done ? t('Delivered') : t('Sending…')
   const chips = [when === 'queue' ? t('Queued') : t('Now'), replyTo === 'user' ? t('Reply to you') : t('Reply to me')]
   const room = roster?.roomsById?.[live?.roomId]?.name ?? null
-  const rows = taskRows(live, approval, waits, room, phrase)
+  const rows = taskRows(live, approval, waits, room, roster, phrase)
   const long = typeof message === 'string' && message.length > 160
   return h('div', { className: 'bt-task', 'data-live': live !== null ? '' : undefined },
     h('div', { className: 'bt-task-head' },
@@ -667,7 +675,7 @@ function TaskCard({ target, self, done, message, when, replyTo, roster, actions,
         h('span', { className: 'bt-task-doing' }, live !== null ? `${doing}…` : doing),
         minutes >= 1 ? h('span', { className: 'bt-task-time' }, ` · ${t('{n} min', { n: minutes })}`) : null)),
     h('div', { className: 'bt-task-chips' },
-      h(TaskBadge, { state, done }),
+      h(TaskBadge, { state }),
       ...chips.map(chip => h('span', { key: chip, className: 'bt-task-chip' }, chip))),
     message ? h('div', { className: 'bt-task-text', 'data-open': open ? '' : undefined }, message) : null,
     rows.length ? h('ol', { className: 'bt-task-steps', 'data-open': open ? '' : undefined },

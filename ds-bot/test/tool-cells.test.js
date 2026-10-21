@@ -95,9 +95,9 @@ test('a member\'s messages in a row stack under its name, and an event line star
   assert.deepEqual(JSON.parse(JSON.stringify(stackReplies(replies).map(item => [item.index, item.texts]))), [[0, ['a', 'b']], [2, []], [3, ['c']], [4, ['d']], [5, ['e']]])
 })
 
-const props = (root, { sessionId = chief.id, roster = team(), actions = {}, turn = 1 } = {}) => ({
+const props = (root, { sessionId = chief.id, roster = team(), actions = {}, turn = 1, useWork } = {}) => ({
   node: { key: 'node', data: { root }, location: { turn: { turn } } }, sessionId,
-  useRoster: select => select(roster), useUi: select => select({ reactions: {}, visits: {} }), actions,
+  useRoster: select => select(roster), useUi: select => select({ reactions: {}, visits: {} }), actions, useWork,
 })
 const show = (root, options) => {
   const out = expand(ToolCell(props(root, options)))
@@ -210,6 +210,39 @@ test('a message card opens the exchange of the chat\'s Bot, from any part', () =
   const later = show(call('message_bot', 'direct', { args: { to: 'Writer' } }), { sessionId: 'chief-2', roster, actions })
   conversation(later).props.onClick()
   assert.deepEqual(JSON.parse(JSON.stringify(opened)), [['chief', 'writer'], ['chief', 'writer']])
+})
+
+// What the card says while the hand-off is in flight, and once it landed. A badge used to
+// repeat the head line's word, so the card read as two states at once.
+test('a task card says one thing at a time, in flight and once landed', () => {
+  const args = { to: 'Writer' }
+  const sending = shown(call('message_bot', 'sending', { args, running: true }))
+  assert.match(sending, /^Writer.*Sending…/)
+  assert.doesNotMatch(sending, /Idle/)
+  const landed = shown(call('message_bot', 'landed', { args, content: 'Delivered to Writer.' }))
+  assert.match(landed, /^Writer.*Delivered/)
+  assert.equal(count(landed, 'Delivered'), 1)
+})
+
+// The work view names what a held-up Bot waits for by id; the card shows the names, and a
+// teammate the window cannot resolve still reads as a teammate rather than as nothing.
+test('a task card names the teammate a held-up Bot waits for, not its id', () => {
+  const target = { id: 'botwriter', name: 'Writer', color: 'blue' }
+  const coder = { id: 'botcoder', name: 'Coder', color: 'red' }
+  const ops = { id: 'roomops', name: 'Ops' }
+  const roster = team({ bots: [target, coder], byId: { botwriter: target, botcoder: coder }, rooms: [ops], roomsById: { roomops: ops } })
+  const args = { to: 'Writer' }
+  const teammate = { bots: {}, rooms: {}, approvals: [], waiting: { botwriter: { bots: ['botcoder'], rooms: [], for: ['chief'] } } }
+  const waiting = shown(call('message_bot', 'w1', { args }), { roster, useWork: select => select(teammate) })
+  assert.match(waiting, /Waiting for a teammate/)
+  assert.match(waiting, /Waiting for Coder in another chat/)
+  assert.doesNotMatch(waiting, /botcoder/)
+  const inGroup = { ...teammate, waiting: { botwriter: { bots: [], rooms: ['roomops'], for: ['chief'] } } }
+  assert.match(shown(call('message_bot', 'w2', { args }), { roster, useWork: select => select(inGroup) }), /Waiting for Ops in a group/)
+  const gone = { ...teammate, waiting: { botwriter: { bots: ['botgone'], rooms: [], for: ['chief'] } } }
+  const unresolvable = shown(call('message_bot', 'w3', { args }), { roster, useWork: select => select(gone) })
+  assert.match(unresolvable, /Waiting for a teammate/)
+  assert.doesNotMatch(unresolvable, /botgone/)
 })
 
 // The activity row reads one note per chat node.
